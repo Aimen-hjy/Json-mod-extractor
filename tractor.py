@@ -26,15 +26,12 @@ def add_edge(source, target):
 
 
 def find_connected_subgraphs(adj, min_size, max_size):
-    """Enumerate all connected subgraphs with size in [min_size, max_size]."""
     results = []
-    seen = set()  # store tuple(sorted(ids)) to deduplicate
+    seen = set()
     nodes = sorted(adj.keys())
 
     for root in nodes:
-        # Only build subgraphs where root is the smallest id to avoid duplicates
         def grow(current_set, frontier):
-            # record if size is within bounds
             if min_size <= len(current_set) <= max_size:
                 key = tuple(sorted(current_set))
                 if key not in seen:
@@ -44,13 +41,11 @@ def find_connected_subgraphs(adj, min_size, max_size):
             if len(current_set) == max_size:
                 return
 
-            # expand using a snapshot of frontier to avoid mutation during iteration
             for node in list(frontier):
                 if node <= root:
-                    continue  # enforce root is the minimal id in the subgraph
+                    continue
 
                 new_set = current_set | {node}
-                # frontier update: remove chosen node, add its neighbors
                 new_frontier = (frontier - {node}) | {nbr for nbr in adj[node] if nbr not in new_set and nbr > root}
                 grow(new_set, new_frontier)
 
@@ -59,24 +54,19 @@ def find_connected_subgraphs(adj, min_size, max_size):
 
     return results
 
-def write_to_file(file_path, component, id_to_obj, size, file_index):
-    """根据命名规则写入文件"""
-    # 从原文件路径提取文件名（不含扩展名）
+def write_to_file(file_path, component, id_to_obj, size, file_index, attr_tag=""):
     dir_path = os.path.dirname(file_path)
     file_name = os.path.basename(file_path)
-    file_stem = os.path.splitext(file_name)[0]  # 去掉 .json 扩展名
+    file_stem = os.path.splitext(file_name)[0]
     
-    # 构造输出文件名：module_abc_5_2.json
-    output_name = f"module_{file_stem}_{size}_{file_index}.json"
+    output_name = f"module_{file_stem}{attr_tag}_{size}_{file_index}.json"
     output_path = os.path.join(dir_path, output_name)
     
-    # 构造输出内容
     res = []
     for node in component:
         obj = id_to_obj[node]
         res.append(obj)
     
-    # 写入文件
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(res, f, indent=4, ensure_ascii=False)
@@ -85,36 +75,47 @@ def write_to_file(file_path, component, id_to_obj, size, file_index):
         print(f"  Error writing {output_path}: {e}")
 
 def process_file(file_path, lower_bound, upper_bound, tag_list):
-    # reset global graphs for each file
     graph.clear()
     digraph.clear()
+
+    # 用于文件命名的属性标签
+    attr_tag = ""
+    if tag_list:
+        attr_tag = "_" + "_".join(sorted(tag_list))
 
     id_to_obj = {}
     with open(file_path, 'r',encoding='utf-8') as file:
         data = json.load(file)
     for item in data:
         id_to_obj[item["id"]] = item
-    #build an id to obj map
     for item in data:
         for key,value in item.items():
-            if key == "id":
+            if key == "id" or key in tag_list:
                 continue
             
-            # 处理 list 类型（如 "wires"）
             if isinstance(value, list):
                 for element in value:
                     if isinstance(element, str) and element in id_to_obj:
                         add_edge(item["id"], element)
                     elif isinstance(element, list):
-                        # 处理嵌套的列表（如 wires[0] 中的元素）
                         for sub_element in element:
                             if isinstance(sub_element, str) and sub_element in id_to_obj:
                                 add_edge(item["id"], sub_element)
-            # 处理非 list 类型的值
             elif isinstance(value, str) and value in id_to_obj:
                 add_edge(item["id"], value)
     # enumerate all connected subgraphs within [lower_bound, upper_bound]
     subgraphs = find_connected_subgraphs(graph, lower_bound, upper_bound)
+
+    # 只保留“无向外出边”的子图：所有出边目标必须仍在子图内
+    def is_self_contained(comp):
+        comp_set = set(comp)
+        for n in comp_set:
+            for tgt in digraph.get(n, []):
+                if tgt not in comp_set:
+                    return False
+        return True
+
+    subgraphs = [c for c in subgraphs if is_self_contained(c)]
 
     # 按大小分组并输出，编号从 1 开始
     size_groups = {}
@@ -123,7 +124,7 @@ def process_file(file_path, lower_bound, upper_bound, tag_list):
 
     for size in sorted(size_groups.keys()):
         for idx, comp in enumerate(size_groups[size], 1):
-            write_to_file(file_path, comp, id_to_obj, size, idx)
+            write_to_file(file_path, comp, id_to_obj, size, idx, attr_tag)
 
     return 
     
@@ -144,10 +145,6 @@ def main():
         print("Processing file")
         process_file(address, lower_bound, upper_bound, tag_list)
         
-            
-    
-    
-    
     elif os.path.isdir(address):
         print("Processing directory")
         process_directory(address, lower_bound, upper_bound, tag_list)
